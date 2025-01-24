@@ -9,7 +9,14 @@ import ctypes
 from ctypes import Structure, windll, c_uint, sizeof, byref
 from ctypes import wintypes
 
+# 新增：匯入 requests、hashlib、subprocess 以便檢查更新與執行程式
+import requests
+import hashlib
+import subprocess
+
+# --------------------------------------------------
 # 設定檔
+# --------------------------------------------------
 AR_VER = '[v2.2.3]'
 SS_DELAY = 5                  # 延遲啟動(秒)
 CPU_USAGE_THRESHOLD = 20      # CPU使用率門檻(%)
@@ -19,7 +26,9 @@ WAIT_HOUR = 18                # 檢測閒置開始時間(時)
 WAIT_MIN = 30                 # 檢測閒置開始時間(分)
 TARGET_EVENT_IDS = [42, 26, 4001, 109, 1002]  # 未關機事件檢查
 
-
+# AneX-AR 的 GitHub 原始檔案位置（用於檢查更新）
+GITHUB_RAW_URL = "https://raw.githubusercontent.com/Anex-Hick/AneX-AR/main/AneX-AR.py"
+LOCAL_FILE = "AneX-AR.py"
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
 env_path = os.path.join(base_dir, "config.env")
@@ -37,6 +46,7 @@ def load_env(filepath):
             key, value = line.split("=", 1)
             env_vars[key.strip()] = value.strip()
     return env_vars
+
 env = load_env(env_path)
 SUPABASE_URL = env.get("SUPABASE_URL")
 SUPABASE_KEY = env.get("SUPABASE_KEY")
@@ -45,14 +55,28 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     sys.exit(1)
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-def log_message(message):  # 事件紀錄
+# --------------------------------------------------
+# 日誌紀錄
+# --------------------------------------------------
+def log_message(message):
+    """
+    將日誌紀錄到使用者 Documents/anex-attendance-record/AneX-AR_Log.txt 中。
+    """
     documents_folder = os.path.join(os.path.expanduser("~"), "Documents", "anex-attendance-record")
+    if not os.path.exists(documents_folder):
+        os.makedirs(documents_folder)
     log_file_path = os.path.join(documents_folder, "AneX-AR_Log.txt")
     current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with open(log_file_path, "a", encoding="utf-8") as f:
         f.write(f"[{current_time}] {message}\n")
 
-def check_internet_connection_via_supabase():  # 嘗試連線至supabase
+# --------------------------------------------------
+# 檢查網路連線
+# --------------------------------------------------
+def check_internet_connection_via_supabase():
+    """
+    嘗試連線至 Supabase 以檢查網路是否正常
+    """
     try:
         supabase.table("userlist").select("*").limit(1).execute()
         return True
@@ -61,19 +85,28 @@ def check_internet_connection_via_supabase():  # 嘗試連線至supabase
         return False
 
 def wait_for_internet():
+    """
+    不斷嘗試連接 Supabase，若失敗則等待五分鐘後重試
+    """
     while True:
         if check_internet_connection_via_supabase():
-            break  # 網路正常，直接結束迴圈
+            break
         else:
             log_message("無法連接 Supabase，等待五分鐘後重試...")
             time.sleep(300)
 
+# --------------------------------------------------
+# MAC 相關
+# --------------------------------------------------
 def normalize_mac(mac):
     mac = mac.upper().replace("-", "").replace(":", "").strip("[]")
     formatted_mac = ":".join(mac[i:i+2] for i in range(0, len(mac), 2))
     return f"[{formatted_mac}]"
 
 def get_local_mac_address():
+    """
+    取得本機的 MAC 位址，若不存在則回傳 None
+    """
     try:
         c = wmi.WMI()
         net_adapters = c.Win32_NetworkAdapterConfiguration(IPEnabled=1)
@@ -87,7 +120,13 @@ def get_local_mac_address():
         log_message(f"取得本機 MAC 位址時發生錯誤: {e}")
         return None
 
+# --------------------------------------------------
+# Windows 事件紀錄
+# --------------------------------------------------
 def get_today_and_previous_events():
+    """
+    取得今日最早開機事件與前一次關機事件，並進行部分時間判斷與處理
+    """
     server = 'localhost'
     log_type = 'System'
     try:
@@ -146,8 +185,8 @@ def get_today_and_previous_events():
 
             earliest_event_time = None
             for ev in events:
-                # 注意: 這裡使用 (ev.EventID & 0xFFFF)
                 if event_start <= ev.TimeGenerated <= event_end:
+                    # 注意 (ev.EventID & 0xFFFF) 以取得真實的 Event ID
                     if (ev.EventID & 0xFFFF) in TARGET_EVENT_IDS:
                         if earliest_event_time is None or ev.TimeGenerated < earliest_event_time:
                             earliest_event_time = ev.TimeGenerated
@@ -164,7 +203,9 @@ def get_today_and_previous_events():
         log_message("未找到今日的最早事件，無法確定上班時間。")
         return None, None
 
-
+# --------------------------------------------------
+# Supabase 相關
+# --------------------------------------------------
 def fetch_userlist_from_supabase():
     try:
         response = supabase.table('userlist').select("*").execute()
@@ -176,8 +217,6 @@ def fetch_userlist_from_supabase():
     except Exception as e:
         log_message(f"無法從 Supabase 獲取使用者列表：{e}")
         return None
-
-
 
 def ensure_daily_table_exists(table_name):
     create_sql = f"""
@@ -250,11 +289,9 @@ def update_attendance_record(date_str, employee_data):
                 err_str = str(e)
                 if "23505" in err_str:
                     log_message(f"偵測到主鍵衝突，錯誤內容：{e}")
-
                     same_mac = supabase.table(table_name).select("id") \
                         .eq('mac_address', attendance_data['mac_address']) \
                         .execute()
-
                     if same_mac.data:
                         log_message("資料表中已有相同 MAC，略過重新插入與修正序列。")
                     else:
@@ -264,7 +301,6 @@ def update_attendance_record(date_str, employee_data):
                     raise
 
         return True
-
     except Exception as e:
         log_message(f"更新出勤記錄失敗：{e}")
         return False
@@ -279,11 +315,9 @@ def verify_attendance_record(date_str, employee_id, check_times=None):
 
         if response.data:
             record = response.data[0]
-
             if check_times:
                 check_in_str = str(record.get('check_in')).replace('T', ' ')
                 check_out_str = str(record.get('check_out')).replace('T', ' ')
-
                 times_in_record = [check_in_str, check_out_str]
 
                 for check_time in check_times:
@@ -298,6 +332,9 @@ def verify_attendance_record(date_str, employee_id, check_times=None):
         log_message(f"驗證出勤紀錄失敗：{e}")
         return False
 
+# --------------------------------------------------
+# 鍵鼠與 CPU 閒置檢查
+# --------------------------------------------------
 class LASTINPUTINFO(Structure):
     _fields_ = [
         ('cbSize', c_uint),
@@ -305,6 +342,9 @@ class LASTINPUTINFO(Structure):
     ]
 
 def get_idle_duration():
+    """
+    取得使用者鍵鼠閒置時間（秒）
+    """
     lastInputInfo = LASTINPUTINFO()
     lastInputInfo.cbSize = sizeof(lastInputInfo)
     try:
@@ -316,21 +356,29 @@ def get_idle_duration():
     return 0
 
 def get_cpu_usage():
+    """
+    取得 CPU 使用率（%）
+    """
     try:
         c = wmi.WMI()
         cpus = c.Win32_Processor()
         if cpus:
             usage_list = [cpu.LoadPercentage for cpu in cpus if cpu.LoadPercentage is not None]
             if usage_list:
-                return round(sum(usage_list) / len(usage_list), 2)  # 取平均值並保留兩位小數
+                return round(sum(usage_list) / len(usage_list), 2)
         return 0
     except Exception as e:
         log_message(f"取得CPU使用率時發生錯誤: {e}")
         return 0
 
+# --------------------------------------------------
+# 開機、關機時間紀錄
+# --------------------------------------------------
 def update_attendance_file(employee_data):
+    """
+    更新本日上下班記錄
+    """
     earliest_today_time, last_shutdown_time = get_today_and_previous_events()
-
     if earliest_today_time is None:
         log_message("無法取得今日最早開機時間，無法更新出勤紀錄。")
         return None, None
@@ -362,9 +410,13 @@ def update_attendance_file(employee_data):
 
     return earliest_today_time, last_shutdown_time
 
-
-import ctypes
+# --------------------------------------------------
+# 關機動作
+# --------------------------------------------------
 def shutdown_windows(delay=300):
+    """
+    顯示對話框提示用戶後，呼叫系統 shutdown 計時關機
+    """
     try:
         message = f"系統將在 {delay // 60} 分鐘後關機，請儲存工作！"
         user_response = ctypes.windll.user32.MessageBoxW(0, message, "系統關機通知", 1)
@@ -376,29 +428,94 @@ def shutdown_windows(delay=300):
     except Exception as e:
         log_message(f"執行 shutdown 時發生錯誤: {e}")
 
-
 def monitor_idle_and_shutdown():
+    """
+    進入迴圈，不斷檢查閒置狀態，
+    若超過閒置時間且 CPU 使用率低，則執行關機動作
+    """
     while True:
         try:
             now = datetime.datetime.now()
             if (now.hour > WAIT_HOUR) or (now.hour == WAIT_HOUR and now.minute >= WAIT_MIN):
                 idle_seconds = get_idle_duration()
-                cpu_usage = get_cpu_usage() or 0
+                cpu_usage_value = get_cpu_usage() or 0
+                log_message(f"檢查閒置狀態 => Idle: {idle_seconds:.0f} 秒, CPU: {cpu_usage_value}%")
 
-                log_message(f"檢查閒置狀態 => Idle: {idle_seconds:.0f} 秒, CPU: {cpu_usage}%")
-
-                if idle_seconds >= IDLE_TIME_THRESHOLD and cpu_usage <= CPU_USAGE_THRESHOLD:
+                if idle_seconds >= IDLE_TIME_THRESHOLD and cpu_usage_value <= CPU_USAGE_THRESHOLD:
                     log_message("偵測到鍵鼠閒置超過設定時間，將執行 5 分鐘倒數關機。")
                     shutdown_windows(delay=SHUTDOWN_COUNTDOWN)
-
             time.sleep(60)
         except Exception as e:
             log_message(f"監控閒置和關機時發生錯誤: {e}")
-            time.sleep(60)  # 發生錯誤後暫停 60 秒
+            time.sleep(60)
 
+# --------------------------------------------------
+# 新增：檢查並更新 AneX-AR.py 的函式
+# --------------------------------------------------
+def check_and_update_anex_ar():
+    """
+    檢查 GitHub 上的 AneX-AR.py 是否有更新，若有就下載，
+    下載後以無視窗方式執行，並結束當前程式。
+    若無更新則直接返回，讓主程式繼續往下走。
+    """
+    # 先切到本程式所在目錄，避免路徑問題
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    os.chdir(script_dir)
 
+    # 取得遠端檔案的內容與雜湊
+    def get_remote_file_hash(url):
+        response = requests.get(url)
+        if response.status_code == 200:
+            content = response.content
+            return hashlib.sha256(content).hexdigest(), content
+        else:
+            log_message(f"無法取得遠端檔案，HTTP 狀態碼: {response.status_code}")
+            return None, None
+
+    # 取得本地檔案的雜湊
+    def get_local_file_hash(file_path):
+        if not os.path.exists(file_path):
+            return None
+        with open(file_path, "rb") as f:
+            content = f.read()
+        return hashlib.sha256(content).hexdigest()
+
+    # 實際檢查更新
+    log_message("開始檢查 AneX-AR.py 是否有更新...")
+
+    remote_hash, remote_content = get_remote_file_hash(GITHUB_RAW_URL)
+    if remote_hash is None:
+        log_message("遠端檔案無法取得，放棄更新。")
+        return  # 無法檢查更新，直接返回
+
+    local_hash = get_local_file_hash(LOCAL_FILE)
+    if local_hash != remote_hash:
+        log_message("偵測到 AneX-AR.py 有更新，正在下載...")
+        try:
+            with open(LOCAL_FILE, "wb") as f:
+                f.write(remote_content)
+            log_message("AneX-AR.py 已更新完成，開始以無視窗方式執行新版本...")
+            subprocess.Popen(["pythonw", LOCAL_FILE])
+            log_message("新版本 AneX-AR.py 已啟動，現在結束 main.py。")
+            sys.exit(0)  # 結束當前程式
+        except PermissionError as e:
+            log_message(f"無法寫入檔案 {LOCAL_FILE}，請檢查檔案是否被鎖定或是否有寫入權限。錯誤: {e}")
+        except Exception as e:
+            log_message(f"下載檔案時發生未知錯誤: {e}")
+    else:
+        log_message("AneX-AR.py 已是最新版本，無需更新。")
+
+# --------------------------------------------------
+# 主程式
+# --------------------------------------------------
 if __name__ == "__main__":
+    # 1. 檢查網路
     wait_for_internet()
+
+    # 2. 檢查 AneX-AR.py 是否需要更新
+    check_and_update_anex_ar()
+
+    # 沒有更新，繼續執行
     log_message(f"程式啟動 {AR_VER}")
     time.sleep(SS_DELAY)
 
@@ -432,5 +549,5 @@ if __name__ == "__main__":
         else:
             log_message("驗證失敗，無法匹配員工資料。")
 
+    # 3. 監控閒置，並於特定時間後關機
     monitor_idle_and_shutdown()
-
