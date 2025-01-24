@@ -378,23 +378,27 @@ def shutdown_windows(delay=300):
         log_message(f"執行 shutdown 時發生錯誤: {e}")
 
 def monitor_idle_and_shutdown():
-
+    has_logged_start_message = False
     while True:
         try:
             now = datetime.datetime.now()
             if (now.hour > WAIT_HOUR) or (now.hour == WAIT_HOUR and now.minute >= WAIT_MIN):
+                if not has_logged_start_message:
+                    log_message(f"已到下班時間，開始監控閒置狀態")
+                    has_logged_start_message = True
+
                 idle_seconds = get_idle_duration()
                 cpu_usage_value = get_cpu_usage() or 0
-                log_message(f"檢查閒置狀態 => Idle: {idle_seconds:.0f} 秒, CPU: {cpu_usage_value}%")
 
                 if idle_seconds >= IDLE_TIME_THRESHOLD and cpu_usage_value <= CPU_USAGE_THRESHOLD:
                     log_message("偵測到鍵鼠閒置超過設定時間，將執行 5 分鐘倒數關機。")
                     shutdown_windows(delay=SHUTDOWN_COUNTDOWN)
+            else:
+                has_logged_start_message = False
             time.sleep(60)
         except Exception as e:
             log_message(f"監控閒置和關機時發生錯誤: {e}")
             time.sleep(60)
-
 
 def check_and_update_anex_ar():
 
