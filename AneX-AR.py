@@ -8,16 +8,11 @@ import sys
 import ctypes
 from ctypes import Structure, windll, c_uint, sizeof, byref
 from ctypes import wintypes
-
-# 新增：匯入 requests、hashlib、subprocess 以便檢查更新與執行程式
 import requests
 import hashlib
 import subprocess
 
-# --------------------------------------------------
-# 設定檔
-# --------------------------------------------------
-AR_VER = '[v2.2.3]'
+AR_VER = '[v2.2.4]'
 SS_DELAY = 5                  # 延遲啟動(秒)
 CPU_USAGE_THRESHOLD = 20      # CPU使用率門檻(%)
 IDLE_TIME_THRESHOLD = 1800    # 鍵鼠無操作時間(秒) = 30 分鐘
@@ -25,9 +20,6 @@ SHUTDOWN_COUNTDOWN = 300      # 關機前倒數時間(秒) = 5 分鐘
 WAIT_HOUR = 18                # 檢測閒置開始時間(時)
 WAIT_MIN = 30                 # 檢測閒置開始時間(分)
 TARGET_EVENT_IDS = [42, 26, 4001, 109, 1002]  # 未關機事件檢查
-
-# AneX-AR 的 GitHub 原始檔案位置（用於檢查更新）
-GITHUB_RAW_URL = "https://raw.githubusercontent.com/Anex-Hick/AneX-AR/main/AneX-AR.py"
 LOCAL_FILE = "AneX-AR.py"
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -35,7 +27,6 @@ env_path = os.path.join(base_dir, "config.env")
 if not os.path.exists(env_path):
     print(f"配置文件不存在：{env_path}")
     sys.exit(1)
-
 def load_env(filepath):
     env_vars = {}
     with open(filepath, "r", encoding="utf-8") as f:
@@ -48,8 +39,10 @@ def load_env(filepath):
     return env_vars
 
 env = load_env(env_path)
+GITHUB_RAW_URL = env.get("GITHUB_URL")
 SUPABASE_URL = env.get("SUPABASE_URL")
 SUPABASE_KEY = env.get("SUPABASE_KEY")
+LOCAL_FILE = env.get("LOCAL_FILE")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     sys.exit(1)
@@ -495,6 +488,11 @@ def check_and_update_anex_ar():
             with open(LOCAL_FILE, "wb") as f:
                 f.write(remote_content)
             log_message("AneX-AR.py 已更新完成，開始以無視窗方式執行新版本...")
+
+            # 以無視窗方式啟動 AneX-AR.py
+            # 如果你希望它在背景執行，可以使用 pythonw
+            # 若使用 python，則需搭配 STARTUPINFO 隱藏視窗
+            # 此處使用 pythonw 最簡單
             subprocess.Popen(["pythonw", LOCAL_FILE])
             log_message("新版本 AneX-AR.py 已啟動，現在結束 main.py。")
             sys.exit(0)  # 結束當前程式
@@ -506,16 +504,16 @@ def check_and_update_anex_ar():
         log_message("AneX-AR.py 已是最新版本，無需更新。")
 
 # --------------------------------------------------
-# 主程式
+# 主程式入口
 # --------------------------------------------------
 if __name__ == "__main__":
-    # 1. 檢查網路
+    # 1. 先檢查網路
     wait_for_internet()
 
-    # 2. 檢查 AneX-AR.py 是否需要更新
+    # 2. 檢查 AneX-AR.py 是否需要更新，若需要則更新並以無視窗方式執行後結束
     check_and_update_anex_ar()
 
-    # 沒有更新，繼續執行
+    # 如果走到這裡，代表沒有更新，繼續執行後續流程
     log_message(f"程式啟動 {AR_VER}")
     time.sleep(SS_DELAY)
 
