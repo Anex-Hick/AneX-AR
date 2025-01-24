@@ -365,17 +365,12 @@ def update_attendance_file(employee_data):
     return earliest_today_time, last_shutdown_time
 
 def shutdown_windows(delay=300):
-
     try:
-        message = f"系統將在 {delay // 60} 分鐘後關機，請儲存工作！"
-        user_response = ctypes.windll.user32.MessageBoxW(0, message, "系統關機通知", 1)
-        if user_response == 1:
-            os.system(f"shutdown /s /f /t {delay}")
-            log_message(f"已呼叫系統內建 shutdown 命令，倒數 {delay} 秒後關機。")
-        else:
-            log_message("用戶取消了關機操作。")
+        log_message(f"已待機半小時，將在 {delay} 秒後關機。")
+        os.system(f"shutdown /s /f /t {delay}")
     except Exception as e:
         log_message(f"執行 shutdown 時發生錯誤: {e}")
+
 
 def monitor_idle_and_shutdown():
     has_logged_start_message = False
