@@ -172,7 +172,6 @@ def get_today_and_previous_events():
         log_message("未找到今日的最早事件，無法確定上班時間。")
         return None, None
 
-
 def fetch_userlist_from_supabase():
     try:
         response = supabase.table('userlist').select("*").execute()
@@ -299,7 +298,6 @@ def verify_attendance_record(date_str, employee_id, check_times=None):
         log_message(f"驗證出勤紀錄失敗：{e}")
         return False
 
-
 class LASTINPUTINFO(Structure):
     _fields_ = [
         ('cbSize', c_uint),
@@ -331,7 +329,6 @@ def get_cpu_usage():
     except Exception as e:
         log_message(f"取得CPU使用率時發生錯誤: {e}")
         return 0
-
 
 def update_attendance_file(employee_data):
 
@@ -366,7 +363,6 @@ def update_attendance_file(employee_data):
         log_message("更新出勤記錄時發生錯誤。")
 
     return earliest_today_time, last_shutdown_time
-
 
 def shutdown_windows(delay=300):
 
@@ -421,30 +417,27 @@ def check_and_update_anex_ar():
             content = f.read()
         return hashlib.sha256(content).hexdigest()
 
-    log_message("開始檢查 AneX-AR.py 是否有更新...")
-
     remote_hash, remote_content = get_remote_file_hash(GITHUB_RAW_URL)
     if remote_hash is None:
-        log_message("遠端檔案無法取得，放棄更新。")
+        log_message("遠端檔案無法取得，更新失敗。")
         return
 
     local_hash = get_local_file_hash(LOCAL_FILE)
     if local_hash != remote_hash:
-        log_message("偵測到 AneX-AR.py 有更新，正在下載...")
+        log_message("偵測到更新，正在下載...")
         try:
             with open(LOCAL_FILE, "wb") as f:
                 f.write(remote_content)
-            log_message("AneX-AR.py 已更新完成，開始以無視窗方式執行新版本...")
+            log_message("更新完成！")
 
             subprocess.Popen(["pythonw", LOCAL_FILE])
-            log_message("新版本 AneX-AR.py 已啟動，現在結束 main.py。")
             sys.exit(0)
         except PermissionError as e:
-            log_message(f"無法寫入檔案 {LOCAL_FILE}，請檢查檔案是否被鎖定或是否有寫入權限。錯誤: {e}")
+            log_message(f"無法寫入檔案 {LOCAL_FILE}: {e}")
         except Exception as e:
             log_message(f"下載檔案時發生未知錯誤: {e}")
     else:
-        log_message("AneX-AR.py 已是最新版本，無需更新。")
+        log_message(f"程式啟動 {AR_VER}")
 
 if __name__ == "__main__":
     # 1. 檢查網路
@@ -454,7 +447,7 @@ if __name__ == "__main__":
     check_and_update_anex_ar()
 
     # 3.沒有更新，繼續執行
-    log_message(f"程式啟動 {AR_VER}")
+    
     time.sleep(SS_DELAY)
 
     try:
