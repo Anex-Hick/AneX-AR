@@ -366,7 +366,7 @@ def check_for_immunity():
     for candidate in ["免死金牌", "免死金牌.txt"]:
         file_path = os.path.join(documents_folder, candidate)
         if os.path.exists(file_path):
-            log_message("偵測到免死金牌檔案，跳過 monitor_idle_and_shutdown。")
+            log_message("...發現免死金牌！")
             return True
     return False
 if __name__ == "__main__":
