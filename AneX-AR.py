@@ -295,6 +295,12 @@ def update_attendance_file(employee_data):
     return earliest_today_time, last_shutdown_time
 def shutdown_windows(delay=300):
     try:
+        log_message(f"已待機半小時，將在 {delay} 秒後關機。")
+        os.system(f"shutdown /s /f /t {delay}")
+    except Exception as e:
+        log_message(f"執行 shutdown 時發生錯誤: {e}")
+def shutdown_windows(delay=300):
+    try:
         log_message(f"系統將在 {delay // 60} 分鐘後關機，請儲存工作。")
         os.system(f"shutdown /s /f /t {delay}")
     except Exception as e:
@@ -355,6 +361,14 @@ def check_and_update_anex_ar():
             log_message(f"下載檔案時發生未知錯誤: {e}")
     else:
         log_message(f"程式啟動 {AR_VER}")
+def check_for_immunity():
+    documents_folder = os.path.join(os.path.expanduser("~"), "Documents", "anex-attendance-record")
+    for candidate in ["免死金牌", "免死金牌.txt"]:
+        file_path = os.path.join(documents_folder, candidate)
+        if os.path.exists(file_path):
+            log_message("偵測到免死金牌檔案，跳過 monitor_idle_and_shutdown。")
+            return True
+    return False
 if __name__ == "__main__":
     wait_for_internet()
     check_and_update_anex_ar()
@@ -385,4 +399,6 @@ if __name__ == "__main__":
                 log_message("出勤記錄驗證失敗。")
         else:
             log_message("驗證失敗，無法匹配員工資料。")
+    if check_for_immunity():
+        sys.exit(0)
     monitor_idle_and_shutdown()
