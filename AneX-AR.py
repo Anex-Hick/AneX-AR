@@ -12,16 +12,15 @@ import requests
 import hashlib
 import subprocess
 
-AR_VER = '[v2.2.4]'
-SS_DELAY = 5                  # 延遲啟動(秒)
-CPU_USAGE_THRESHOLD = 20      # CPU使用率門檻(%)
-IDLE_TIME_THRESHOLD = 1800    # 鍵鼠無操作時間(秒) = 30 分鐘
-SHUTDOWN_COUNTDOWN = 300      # 關機前倒數時間(秒) = 5 分鐘
-WAIT_HOUR = 18                # 檢測閒置開始時間(時)
-WAIT_MIN = 30                 # 檢測閒置開始時間(分)
-TARGET_EVENT_IDS = [42, 26, 4001, 109, 1002]  # 未關機事件檢查
+AR_VER = '[v2.2.5]'
+SS_DELAY = 5
+CPU_USAGE_THRESHOLD = 20
+IDLE_TIME_THRESHOLD = 1800
+SHUTDOWN_COUNTDOWN = 300
+WAIT_HOUR = 18
+WAIT_MIN = 30
+TARGET_EVENT_IDS = [42, 26, 4001, 109, 1002]
 LOCAL_FILE = "AneX-AR.py"
-
 base_dir = os.path.dirname(os.path.abspath(__file__))
 env_path = os.path.join(base_dir, "config.env")
 if not os.path.exists(env_path):
@@ -37,18 +36,14 @@ def load_env(filepath):
             key, value = line.split("=", 1)
             env_vars[key.strip()] = value.strip()
     return env_vars
-
 env = load_env(env_path)
 GITHUB_RAW_URL = env.get("GITHUB_URL")
 SUPABASE_URL = env.get("SUPABASE_URL")
 SUPABASE_KEY = env.get("SUPABASE_KEY")
 LOCAL_FILE = env.get("LOCAL_FILE")
-
 if not SUPABASE_URL or not SUPABASE_KEY:
     sys.exit(1)
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-
 def log_message(message):
     documents_folder = os.path.join(os.path.expanduser("~"), "Documents", "anex-attendance-record")
     if not os.path.exists(documents_folder):
@@ -57,8 +52,6 @@ def log_message(message):
     current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with open(log_file_path, "a", encoding="utf-8") as f:
         f.write(f"[{current_time}] {message}\n")
-
-
 def check_internet_connection_via_supabase():
     try:
         supabase.table("userlist").select("*").limit(1).execute()
@@ -66,7 +59,6 @@ def check_internet_connection_via_supabase():
     except Exception as e:
         log_message(f"嘗試連線至supabase失敗: {e}")
         return False
-
 def wait_for_internet():
     while True:
         if check_internet_connection_via_supabase():
@@ -74,14 +66,11 @@ def wait_for_internet():
         else:
             log_message("無法連接 Supabase，等待五分鐘後重試...")
             time.sleep(300)
-
 def normalize_mac(mac):
     mac = mac.upper().replace("-", "").replace(":", "").strip("[]")
     formatted_mac = ":".join(mac[i:i+2] for i in range(0, len(mac), 2))
     return f"[{formatted_mac}]"
-
 def get_local_mac_address():
-
     try:
         c = wmi.WMI()
         net_adapters = c.Win32_NetworkAdapterConfiguration(IPEnabled=1)
@@ -94,7 +83,6 @@ def get_local_mac_address():
     except Exception as e:
         log_message(f"取得本機 MAC 位址時發生錯誤: {e}")
         return None
-
 def get_today_and_previous_events():
     server = 'localhost'
     log_type = 'System'
@@ -103,11 +91,9 @@ def get_today_and_previous_events():
     except Exception as e:
         log_message(f"無法打開 System Log 事件紀錄: {e}")
         return None, None
-
     today = datetime.datetime.now()
     start_time = datetime.datetime(today.year, today.month, today.day)
     end_time = start_time + datetime.timedelta(days=1)
-
     flags = win32evtlog.EVENTLOG_BACKWARDS_READ | win32evtlog.EVENTLOG_SEQUENTIAL_READ
     events = []
     read_count = 0
@@ -117,61 +103,46 @@ def get_today_and_previous_events():
             break
         events.extend(records)
         read_count += len(records)
-
     win32evtlog.CloseEventLog(handle)
-
     if not events:
         log_message("未找到任何系統事件")
         return None, None
-
     events.sort(key=lambda e: e.TimeGenerated)
-
-    # 取得今日最早事件
     earliest_today_event = None
     for event in events:
         if start_time <= event.TimeGenerated < end_time:
             earliest_today_event = event
             break
-
     if earliest_today_event:
         log_message(f"本日開機時間為: {earliest_today_event.TimeGenerated}")
-        # 往回找離這個事件最近的一筆事件 (作為上次下班時間)
         latest_event_time = None
         for event in reversed(events):
             if event.TimeGenerated < earliest_today_event.TimeGenerated:
                 latest_event_time = event.TimeGenerated
                 break
-
         if latest_event_time:
             log_message(f"上次關機時間為: {latest_event_time}")
-
-        # 如果昨天下班時間超過晚上 22:00，檢查指定的 Event ID
         if latest_event_time and latest_event_time.hour >= 22:
             log_message("昨天未準時關機，開始檢查是否有符合條件的事件。")
             target_date = latest_event_time.date()
             event_start = datetime.datetime.combine(target_date, datetime.time(18, 30))
             event_end = datetime.datetime.combine(target_date, datetime.time(23, 59, 59))
-
             earliest_event_time = None
             for ev in events:
                 if event_start <= ev.TimeGenerated <= event_end:
-                    # 注意 (ev.EventID & 0xFFFF) 以取得真實的 Event ID
                     if (ev.EventID & 0xFFFF) in TARGET_EVENT_IDS:
                         if earliest_event_time is None or ev.TimeGenerated < earliest_event_time:
                             earliest_event_time = ev.TimeGenerated
                             log_message(f"找到事件: {ev.EventID}，時間: {earliest_event_time}")
-
             if earliest_event_time:
                 latest_event_time = earliest_event_time
                 log_message(f"將昨天下班時間更新為符合條件的事件時間: {latest_event_time}")
             else:
                 log_message("未找到符合條件的事件，保持原始的昨天下班時間。")
-
         return earliest_today_event.TimeGenerated, latest_event_time
     else:
         log_message("未找到今日的最早事件，無法確定上班時間。")
         return None, None
-
 def fetch_userlist_from_supabase():
     try:
         response = supabase.table('userlist').select("*").execute()
@@ -183,7 +154,6 @@ def fetch_userlist_from_supabase():
     except Exception as e:
         log_message(f"無法從 Supabase 獲取使用者列表：{e}")
         return None
-
 def ensure_daily_table_exists(table_name):
     create_sql = f"""
     CREATE TABLE IF NOT EXISTS public.{table_name} (
@@ -201,33 +171,23 @@ def ensure_daily_table_exists(table_name):
         supabase.rpc("execute_sql", {"sql": create_sql}).execute()
     except Exception as e:
         log_message(f"嘗試建立表格 {table_name} 失敗：{e}")
-
 def fix_sequence(table_name):
     try:
-        # 先取得表中最大 id
         max_id_sql = f"SELECT MAX(id) AS max_id FROM public.{table_name}"
         max_id_resp = supabase.rpc("execute_sql", {"sql": max_id_sql}).execute()
         if max_id_resp.data:
             current_max_id = max_id_resp.data[0].get("max_id") or 0
-            # 將 sequence 調整為 (current_max_id + 1)
-            setval_sql = (
-                f"SELECT setval("
-                f"pg_get_serial_sequence('public.{table_name}', 'id'), "
-                f"{current_max_id + 1}"
-                f");"
-            )
+            setval_sql = f"SELECT setval(pg_get_serial_sequence('public.{table_name}', 'id'), {current_max_id + 1});"
             supabase.rpc("execute_sql", {"sql": setval_sql}).execute()
             log_message(f"已將序列調整為 {current_max_id + 1}")
     except Exception as e:
         log_message(f"修正序列時發生錯誤: {e}")
-
 def update_attendance_record(date_str, employee_data):
     table_name = "attendance_" + date_str.replace('-', '_')
     try:
         ensure_daily_table_exists(table_name)
         check_in_val = employee_data.get('check_in') or None
         check_out_val = employee_data.get('check_out') or None
-
         attendance_data = {
             'date': date_str,
             'employee_id': employee_data['employee_id'],
@@ -237,17 +197,9 @@ def update_attendance_record(date_str, employee_data):
             'check_out': check_out_val,
             'version': AR_VER
         }
-
-        existing = supabase.table(table_name).select("*") \
-            .eq('date', date_str) \
-            .eq('employee_id', employee_data['employee_id']) \
-            .execute()
-
+        existing = supabase.table(table_name).select("*").eq('date', date_str).eq('employee_id', employee_data['employee_id']).execute()
         if existing.data:
-            supabase.table(table_name).update(attendance_data) \
-                .eq('date', date_str) \
-                .eq('employee_id', employee_data['employee_id']) \
-                .execute()
+            supabase.table(table_name).update(attendance_data).eq('date', date_str).eq('employee_id', employee_data['employee_id']).execute()
         else:
             try:
                 supabase.table(table_name).insert(attendance_data).execute()
@@ -255,9 +207,7 @@ def update_attendance_record(date_str, employee_data):
                 err_str = str(e)
                 if "23505" in err_str:
                     log_message(f"偵測到主鍵衝突，錯誤內容：{e}")
-                    same_mac = supabase.table(table_name).select("id") \
-                        .eq('mac_address', attendance_data['mac_address']) \
-                        .execute()
+                    same_mac = supabase.table(table_name).select("id").eq('mac_address', attendance_data['mac_address']).execute()
                     if same_mac.data:
                         log_message("資料表中已有相同 MAC，略過重新插入與修正序列。")
                     else:
@@ -265,27 +215,20 @@ def update_attendance_record(date_str, employee_data):
                         fix_sequence(table_name)
                 else:
                     raise
-
         return True
     except Exception as e:
         log_message(f"更新出勤記錄失敗：{e}")
         return False
-
 def verify_attendance_record(date_str, employee_id, check_times=None):
     table_name = "attendance_" + date_str.replace('-', '_')
     try:
-        response = supabase.table(table_name).select("*") \
-            .eq('date', date_str) \
-            .eq('employee_id', employee_id) \
-            .execute()
-
+        response = supabase.table(table_name).select("*").eq('date', date_str).eq('employee_id', employee_id).execute()
         if response.data:
             record = response.data[0]
             if check_times:
                 check_in_str = str(record.get('check_in')).replace('T', ' ')
                 check_out_str = str(record.get('check_out')).replace('T', ' ')
                 times_in_record = [check_in_str, check_out_str]
-
                 for check_time in check_times:
                     if check_time in times_in_record:
                         return True
@@ -297,15 +240,12 @@ def verify_attendance_record(date_str, employee_id, check_times=None):
     except Exception as e:
         log_message(f"驗證出勤紀錄失敗：{e}")
         return False
-
 class LASTINPUTINFO(Structure):
     _fields_ = [
         ('cbSize', c_uint),
         ('dwTime', c_uint)
     ]
-
 def get_idle_duration():
-
     lastInputInfo = LASTINPUTINFO()
     lastInputInfo.cbSize = sizeof(lastInputInfo)
     try:
@@ -315,9 +255,7 @@ def get_idle_duration():
     except Exception as e:
         log_message(f"取得閒置時間時發生錯誤: {e}")
     return 0
-
 def get_cpu_usage():
-
     try:
         c = wmi.WMI()
         cpus = c.Win32_Processor()
@@ -329,27 +267,21 @@ def get_cpu_usage():
     except Exception as e:
         log_message(f"取得CPU使用率時發生錯誤: {e}")
         return 0
-
 def update_attendance_file(employee_data):
-
     earliest_today_time, last_shutdown_time = get_today_and_previous_events()
     if earliest_today_time is None:
         log_message("無法取得今日最早開機時間，無法更新出勤紀錄。")
         return None, None
-
     today_str = datetime.datetime.now().strftime("%Y-%m-%d")
     mac_address = get_local_mac_address()
     if not mac_address:
         log_message("無法取得本機MAC地址，請檢查網路配置。")
         return None, None
-
     employee_info = next((emp for emp in employee_data if emp['mac_address'] == mac_address), None)
     if not employee_info:
         log_message(f"找不到匹配的員工資料 (MAC={mac_address})，請檢查 userlist 資料。")
         return None, None
-
     log_message(f"{employee_info['employee_id']} {employee_info['name']} {employee_info['mac_address']}")
-
     both_data = {
         'employee_id': employee_info['employee_id'],
         'employee_name': employee_info['name'],
@@ -357,21 +289,16 @@ def update_attendance_file(employee_data):
         'check_in': str(earliest_today_time),
         'check_out': str(last_shutdown_time) if last_shutdown_time else None
     }
-
     success = update_attendance_record(today_str, both_data)
     if not success:
         log_message("更新出勤記錄時發生錯誤。")
-
     return earliest_today_time, last_shutdown_time
-
 def shutdown_windows(delay=300):
     try:
-        log_message(f"已待機半小時，將在 {delay} 秒後關機。")
+        log_message(f"系統將在 {delay // 60} 分鐘後關機，請儲存工作。")
         os.system(f"shutdown /s /f /t {delay}")
     except Exception as e:
         log_message(f"執行 shutdown 時發生錯誤: {e}")
-
-
 def monitor_idle_and_shutdown():
     has_logged_start_message = False
     while True:
@@ -379,12 +306,10 @@ def monitor_idle_and_shutdown():
             now = datetime.datetime.now()
             if (now.hour > WAIT_HOUR) or (now.hour == WAIT_HOUR and now.minute >= WAIT_MIN):
                 if not has_logged_start_message:
-                    log_message(f"已到下班時間，開始監控閒置狀態")
+                    log_message("已到下班時間，開始監控閒置狀態")
                     has_logged_start_message = True
-
                 idle_seconds = get_idle_duration()
                 cpu_usage_value = get_cpu_usage() or 0
-
                 if idle_seconds >= IDLE_TIME_THRESHOLD and cpu_usage_value <= CPU_USAGE_THRESHOLD:
                     log_message("偵測到鍵鼠閒置超過設定時間，將執行 5 分鐘倒數關機。")
                     shutdown_windows(delay=SHUTDOWN_COUNTDOWN)
@@ -394,12 +319,9 @@ def monitor_idle_and_shutdown():
         except Exception as e:
             log_message(f"監控閒置和關機時發生錯誤: {e}")
             time.sleep(60)
-
 def check_and_update_anex_ar():
-
     script_dir = os.path.dirname(os.path.abspath(__file__))
     os.chdir(script_dir)
-
     def get_remote_file_hash(url):
         response = requests.get(url)
         if response.status_code == 200:
@@ -408,19 +330,16 @@ def check_and_update_anex_ar():
         else:
             log_message(f"無法取得遠端檔案，HTTP 狀態碼: {response.status_code}")
             return None, None
-
     def get_local_file_hash(file_path):
         if not os.path.exists(file_path):
             return None
         with open(file_path, "rb") as f:
             content = f.read()
         return hashlib.sha256(content).hexdigest()
-
     remote_hash, remote_content = get_remote_file_hash(GITHUB_RAW_URL)
     if remote_hash is None:
         log_message("遠端檔案無法取得，更新失敗。")
         return
-
     local_hash = get_local_file_hash(LOCAL_FILE)
     if local_hash != remote_hash:
         log_message("偵測到更新，正在下載...")
@@ -428,7 +347,6 @@ def check_and_update_anex_ar():
             with open(LOCAL_FILE, "wb") as f:
                 f.write(remote_content)
             log_message("更新完成！")
-
             subprocess.Popen(["pythonw", LOCAL_FILE])
             sys.exit(0)
         except PermissionError as e:
@@ -437,18 +355,10 @@ def check_and_update_anex_ar():
             log_message(f"下載檔案時發生未知錯誤: {e}")
     else:
         log_message(f"程式啟動 {AR_VER}")
-
 if __name__ == "__main__":
-    # 1. 檢查網路
     wait_for_internet()
-
-    # 2. 檢查 AneX-AR.py 是否需要更新
     check_and_update_anex_ar()
-
-    # 3.沒有更新，繼續執行
-    
     time.sleep(SS_DELAY)
-
     try:
         employee_data = fetch_userlist_from_supabase()
         if not employee_data:
@@ -458,19 +368,16 @@ if __name__ == "__main__":
     except Exception as e:
         log_message(f"程序執行失敗: {e}")
         sys.exit(0)
-
     if earliest_today_time is not None:
         today_str = datetime.datetime.now().strftime("%Y-%m-%d")
         mac_address = get_local_mac_address()
         if not mac_address:
             log_message("無法取得本機MAC地址，程序即將退出。請檢查網路配置。")
             sys.exit(0)
-
         employee_info = next((emp for emp in employee_data if emp['mac_address'] == mac_address), None)
         if employee_info:
             check_times = [str(earliest_today_time), str(last_shutdown_time) if last_shutdown_time else None]
             check_times = [time for time in check_times if time]
-
             updated_successfully = verify_attendance_record(today_str, employee_info['employee_id'], check_times)
             if updated_successfully:
                 log_message("出勤記錄驗證成功。")
@@ -478,6 +385,4 @@ if __name__ == "__main__":
                 log_message("出勤記錄驗證失敗。")
         else:
             log_message("驗證失敗，無法匹配員工資料。")
-
-    # 4. 監控閒置，並於特定時間後關機
     monitor_idle_and_shutdown()
