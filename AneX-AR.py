@@ -297,8 +297,6 @@ def monitor_idle_and_shutdown():
             now = datetime.datetime.now()
             idle_seconds = get_idle_duration()
             cpu_usage_value = get_cpu_usage()
-            log_message(f"目前時間={now.strftime('%H:%M:%S')}, "
-                        f"idle_seconds={idle_seconds:.0f}, CPU={cpu_usage_value} %")
             is_after_office = ((now.hour > WAIT_HOUR) or 
                                (now.hour == WAIT_HOUR and now.minute >= WAIT_MIN))
             cpu_is_idle = (cpu_usage_value <= CPU_USAGE_THRESHOLD)
