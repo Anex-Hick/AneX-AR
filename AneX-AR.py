@@ -271,57 +271,48 @@ def get_cpu_usage():
 
 def shutdown_windows(delay=300):
     try:
-        log_message(f"系統將在 {delay // 60} 分鐘後關機，請儲存工作。")
+        minutes = delay // 60
+        log_message(f"系統將在 {minutes} 分鐘後關機，請盡速儲存您的工作。")
         os.system(f"shutdown /s /f /t {delay}")
     except Exception as e:
         log_message(f"執行 shutdown 時發生錯誤: {e}")
 
 def get_idle_duration():
-    lastInputInfo = LASTINPUTINFO()
-    lastInputInfo.cbSize = sizeof(lastInputInfo)
+    """取得使用者鍵盤/滑鼠的閒置秒數"""
+    last_input_info = LASTINPUTINFO()
+    last_input_info.cbSize = sizeof(last_input_info)
     try:
-        if windll.user32.GetLastInputInfo(byref(lastInputInfo)):
-            millis = windll.kernel32.GetTickCount64() - lastInputInfo.dwTime  # 使用 GetTickCount64
-            seconds = millis / 1000.0
-            if seconds > 60:  # 每分鐘記錄一次
-                log_message(f"目前閒置時間: {seconds:.1f} 秒")
-            return seconds
+        if windll.user32.GetLastInputInfo(byref(last_input_info)):
+            millis_now = windll.kernel32.GetTickCount()
+            last_input_millis = last_input_info.dwTime
+            idle_seconds = (millis_now - last_input_millis) / 1000.0
+            return idle_seconds
     except Exception as e:
         log_message(f"取得閒置時間時發生錯誤: {e}")
     return 0
 
 def monitor_idle_and_shutdown():
-    has_logged_start_message = False
-    last_shutdown_attempt = 0  # 記錄上次嘗試關機的時間
     while True:
         try:
             now = datetime.datetime.now()
-            if (now.hour > WAIT_HOUR) or (now.hour == WAIT_HOUR and now.minute >= WAIT_MIN):
-                if not has_logged_start_message:
-                    log_message("已到下班時間，開始監控閒置狀態")
-                    has_logged_start_message = True
-                
-                idle_seconds = get_idle_duration()
-                cpu_usage_value = get_cpu_usage() or 0
-                
-                # 新增日誌以追蹤狀態
-                if idle_seconds > 60:  # 每分鐘記錄一次
-                    log_message(f"閒置時間: {idle_seconds:.1f} 秒, CPU使用率: {cpu_usage_value}%")
-                
-                current_time = time.time()
-                if idle_seconds >= IDLE_TIME_THRESHOLD and cpu_usage_value <= CPU_USAGE_THRESHOLD:
-                    # 確保兩次關機嘗試之間至少間隔 10 分鐘
-                    if current_time - last_shutdown_attempt > 600:
-                        log_message(f"偵測到鍵鼠閒置超過設定時間 ({idle_seconds:.1f} 秒)，將執行 5 分鐘倒數關機。")
-                        shutdown_windows(delay=SHUTDOWN_COUNTDOWN)
-                        last_shutdown_attempt = current_time
-            else:
-                has_logged_start_message = False
-            time.sleep(60)  # 每分鐘檢查一次
+            idle_seconds = get_idle_duration()
+            cpu_usage_value = get_cpu_usage()
+            log_message(f"目前時間={now.strftime('%H:%M:%S')}, "
+                        f"idle_seconds={idle_seconds:.0f}, CPU={cpu_usage_value} %")
+            is_after_office = ((now.hour > WAIT_HOUR) or 
+                               (now.hour == WAIT_HOUR and now.minute >= WAIT_MIN))
+            cpu_is_idle = (cpu_usage_value <= CPU_USAGE_THRESHOLD)
+            mouse_keyboard_idle = (idle_seconds >= IDLE_TIME_THRESHOLD)
+
+            if is_after_office and cpu_is_idle and mouse_keyboard_idle:
+                log_message("偵測到時間已晚於18:30、CPU閒置、鍵鼠無操作超過30分鐘，將執行5分鐘倒數關機。")
+                shutdown_windows(delay=SHUTDOWN_COUNTDOWN)
+
+            time.sleep(60)
         except Exception as e:
             log_message(f"監控閒置和關機時發生錯誤: {e}")
             time.sleep(60)
-
+            
 def check_and_update_anex_ar():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     os.chdir(script_dir)
