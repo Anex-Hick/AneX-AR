@@ -13,22 +13,19 @@ import hashlib
 import subprocess
 
 # === 版本與常數設定 ===
-AR_VER = '[v2.2.6]'
+AR_VER = '[v2.2.5]'
 SS_DELAY = 5
 CPU_USAGE_THRESHOLD = 20
-IDLE_TIME_THRESHOLD = 1800
+IDLE_TIME_THRESHOLD = 18
 SHUTDOWN_COUNTDOWN = 300
 WAIT_HOUR = 18
 WAIT_MIN = 30
-
-# 這裡的事件 ID 可能對應 System Log，如果改讀 Security Log，請自行調整成對應的安全事件 ID
 TARGET_EVENT_IDS = [42, 26, 4001, 109, 1002]
 
 # === 檔案與路徑設定 ===
 base_dir = os.path.dirname(os.path.abspath(__file__))
 env_path = os.path.join(base_dir, "config.env")
 
-# === 如果 config.env 不存在，五分鐘後重試，直到找到為止 ===
 while not os.path.exists(env_path):
     print(f"配置文件不存在：{env_path}，將在五分鐘後重試...")
     time.sleep(300)
@@ -47,7 +44,6 @@ def load_env(filepath):
             env_vars[key.strip()] = value.strip()
     return env_vars
 
-# === 讀取 env 變數，若變數不完整也要五分鐘後重試 ===
 while True:
     env = load_env(env_path)
     GITHUB_RAW_URL = env.get("GITHUB_URL")
@@ -60,7 +56,6 @@ while True:
         continue
     break
 
-# === 建立 Supabase 連線 ===
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def log_message(message):
@@ -126,19 +121,16 @@ def get_local_mac_address():
 
 def get_today_and_previous_events():
     """
-    讀取 Security Log (而非 System Log)，僅限事件來源為「Microsoft Windows security auditing」，
-    取得今日最早開機時間 (earliest_today_event)，以及昨日最後一次事件時間 (latest_event_time)。
-    
-    如果今日開機事件為 None，代表失敗，將返回 (None, None)。
-    若要對應真正的登入/登出事件，應修改 TARGET_EVENT_IDS 為 Security Log 的事件 ID。
+    讀取系統日誌 (System Log)，取得今日最早開機事件時間 (earliest_today_event)
+    以及前一次關機時間 (latest_event_time)
+    如果今日開機事件為 None，代表失敗
     """
     server = 'localhost'
-    # 改成讀取 Security Log
-    log_type = 'Security'
+    log_type = 'System'
     try:
         handle = win32evtlog.OpenEventLog(server, log_type)
     except Exception as e:
-        log_message(f"無法打開 Security Log 事件紀錄: {e}")
+        log_message(f"無法打開 System Log 事件紀錄: {e}")
         return None, None
 
     today = datetime.datetime.now()
@@ -156,36 +148,32 @@ def get_today_and_previous_events():
     win32evtlog.CloseEventLog(handle)
 
     if not events:
-        log_message("未找到任何 Security Log 事件")
+        log_message("未找到任何系統事件")
         return None, None
 
-    # 依事件時間排序
     events.sort(key=lambda e: e.TimeGenerated)
 
+    # 找今日最早事件
     earliest_today_event = None
     for event in events:
-        # 先檢查事件來源是不是 "Microsoft Windows security auditing"
-        if event.SourceName == "Microsoft Windows security auditing":
-            # 只處理今天 0:00~24:00 之間的第一筆事件
-            if start_time <= event.TimeGenerated < end_time:
-                earliest_today_event = event
-                break
+        if start_time <= event.TimeGenerated < end_time:
+            earliest_today_event = event
+            break
 
     if earliest_today_event:
-        log_message(f"本日開機(或對應事件)時間為: {earliest_today_event.TimeGenerated}")
+        log_message(f"本日開機時間為: {earliest_today_event.TimeGenerated}")
         latest_event_time = None
-
-        # 逆向找上一次符合條件的事件
+        # 向前找(逆序)最晚的事件時間
         for event in reversed(events):
             if event.TimeGenerated < earliest_today_event.TimeGenerated:
-                if event.SourceName == "Microsoft Windows security auditing":
-                    latest_event_time = event.TimeGenerated
-                    break
+                latest_event_time = event.TimeGenerated
+                break
 
         if latest_event_time:
-            log_message(f"上次事件時間為: {latest_event_time}")
+            log_message(f"上次關機時間為: {latest_event_time}")
 
-        # 22點之後代表昨晚未準時關機，嘗試再去檢查 18:30~23:59:59 是否有符合條件事件
+        # 如果發現上一次關機時間在22點之後，表示昨晚未準時關機
+        # 嘗試再查找當天 18:30 ~ 23:59:59 之間是否有符合條件的事件
         if latest_event_time and latest_event_time.hour >= 22:
             log_message("昨天未準時關機，開始檢查是否有符合條件的事件。")
             target_date = latest_event_time.date()
@@ -194,12 +182,11 @@ def get_today_and_previous_events():
 
             earliest_event_time = None
             for ev in events:
-                if ev.SourceName == "Microsoft Windows security auditing":
-                    if event_start <= ev.TimeGenerated <= event_end:
-                        if (ev.EventID & 0xFFFF) in TARGET_EVENT_IDS:
-                            if earliest_event_time is None or ev.TimeGenerated < earliest_event_time:
-                                earliest_event_time = ev.TimeGenerated
-                                log_message(f"找到事件: {ev.EventID}，時間: {earliest_event_time}")
+                if event_start <= ev.TimeGenerated <= event_end:
+                    if (ev.EventID & 0xFFFF) in TARGET_EVENT_IDS:
+                        if earliest_event_time is None or ev.TimeGenerated < earliest_event_time:
+                            earliest_event_time = ev.TimeGenerated
+                            log_message(f"找到事件: {ev.EventID}，時間: {earliest_event_time}")
 
             if earliest_event_time:
                 latest_event_time = earliest_event_time
@@ -209,7 +196,7 @@ def get_today_and_previous_events():
 
         return earliest_today_event.TimeGenerated, latest_event_time
     else:
-        log_message("未找到今日的最早事件（來源為 Microsoft Windows security auditing），無法確定上班時間。")
+        log_message("未找到今日的最早事件，無法確定上班時間。")
         return None, None
 
 def fetch_userlist_from_supabase():
@@ -487,14 +474,14 @@ def check_for_immunity():
 
 def update_attendance_file(employee_data):
     """
-    透過讀取 Security Log 取得今日相關事件，並更新出勤資料表
-    如果找不到今日開機 (earliest_today_time = None)，不斷五分鐘後重試
-    如果取得 MAC 或員工資料失敗，也不斷五分鐘後重試
+    透過讀取系統日誌取得今日開機與上次關機時間，並更新出勤資料表
+    如果找不到今日開機 (earliest_today_time = None)，不斷重試直到成功
+    如果取得 MAC 或員工資料失敗，也不斷重試
     """
     while True:
         earliest_today_time, last_shutdown_time = get_today_and_previous_events()
         if earliest_today_time is None:
-            log_message("無法取得今日最早事件時間，五分鐘後重試...")
+            log_message("無法取得今日最早開機時間，五分鐘後重試...")
             time.sleep(300)
             continue
 
@@ -519,7 +506,7 @@ def update_attendance_file(employee_data):
                 'check_out': str(last_shutdown_time) if last_shutdown_time else None
             }
 
-            # 不斷嘗試更新出勤記錄，成功才離開
+            # 不斷嘗試更新出勤紀錄，成功才離開
             while True:
                 success = update_attendance_record(datetime.datetime.now().strftime("%Y-%m-%d"), both_data)
                 if success:
