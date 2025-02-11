@@ -26,6 +26,7 @@ TARGET_EVENT_IDS = [42, 26, 4001, 109, 1002]
 base_dir = os.path.dirname(os.path.abspath(__file__))
 env_path = os.path.join(base_dir, "config.env")
 
+# === 如果 config.env 不存在，五分鐘後重試，直到找到為止 ===
 while not os.path.exists(env_path):
     print(f"配置文件不存在：{env_path}，將在五分鐘後重試...")
     time.sleep(300)
@@ -44,6 +45,7 @@ def load_env(filepath):
             env_vars[key.strip()] = value.strip()
     return env_vars
 
+# === 讀取 env 變數，若變數不完整也要五分鐘後重試 ===
 while True:
     env = load_env(env_path)
     GITHUB_RAW_URL = env.get("GITHUB_URL")
@@ -56,6 +58,7 @@ while True:
         continue
     break
 
+# === 建立 Supabase 連線 ===
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def log_message(message):
