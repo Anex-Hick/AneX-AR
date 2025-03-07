@@ -126,7 +126,7 @@ def get_today_and_previous_events():
                 break
         if latest_event_time:
             log_message(f"上次關機時間為: {latest_event_time}")
-        if latest_event_time and latest_event_time.hour >= 22:
+        if latest_event_time and latest_event_time.hour >= 23:
             log_message("昨天未準時關機，開始檢查是否有符合條件的事件。")
             target_date = latest_event_time.date()
             event_start = datetime.datetime.combine(target_date, datetime.time(18, 30))
