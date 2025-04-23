@@ -11,7 +11,7 @@ import requests
 import hashlib
 import subprocess
 
-AR_VER = '[v2.2.6]'
+AR_VER = '[v2.2.7]'
 SS_DELAY = 3
 CPU_USAGE_THRESHOLD = 50
 IDLE_TIME_THRESHOLD = 1800
@@ -161,6 +161,7 @@ def fetch_userlist_from_supabase():
         return None
 
 def ensure_daily_table_exists(table_name):
+    # 將建立表格、啟用 RLS 及新增允許所有存取的 policy 合併為單次執行
     create_sql = f"""
     CREATE TABLE IF NOT EXISTS public.{table_name} (
         id BIGSERIAL PRIMARY KEY,
@@ -172,11 +173,23 @@ def ensure_daily_table_exists(table_name):
         check_out TIMESTAMP NULL,
         version VARCHAR(20)
     );
+    
+    ALTER TABLE public.{table_name} ENABLE ROW LEVEL SECURITY;
+    
+    -- 如果已經存在同名 policy，先刪除再重新建立，避免錯誤
+    DROP POLICY IF EXISTS "Allow all operations" ON public.{table_name};
+    
+    CREATE POLICY "Allow all operations"
+        ON public.{table_name}
+        FOR ALL
+        TO public
+        USING (true)
+        WITH CHECK (true);
     """
     try:
         supabase.rpc("execute_sql", {"sql": create_sql}).execute()
     except Exception as e:
-        log_message(f"嘗試建立表格 {table_name} 失敗：{e}")
+        log_message(f"嘗試建立表格 {table_name} 或套用 RLS/Policy 失敗：{e}")
 
 def fix_sequence(table_name):
     try:
